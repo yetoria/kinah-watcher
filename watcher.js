@@ -6,7 +6,7 @@ const TARGET_PRICE = 1.40;
 const FALLBACK_USD_TO_EUR = 0.92;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CHANNEL_ID = '1573349614529020025';
-const ANNOUNCE_START = true;
+const ANNOUNCE_START = false; // Désactivé pour ne pas envoyer un message vide de prix au démarrage
 
 async function getUsdToEurRate() {
   try {
@@ -56,23 +56,37 @@ async function updateChannelName(newName, currentName) {
   if (!res.ok) console.warn(`⚠️ Erreur rename Discord (HTTP ${res.status})`);
 }
 
+async function dumpPriceContexts(page, regex) {
+  const loc = page.locator('text=' + regex.source).filter({ visible: true });
+  const count = await loc.count();
+  const items = [];
+  for (let i = 0; i < Math.min(count, 10); i++) {
+    const el = loc.nth(i);
+    const priceText = (await el.textContent())?.trim() ?? '';
+    const parentText = (await el.locator('xpath=ancestor::*[self::div or self::li or self::tr][1]').textContent().catch(() => ''))
+      ?.replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 140) ?? '';
+    items.push({ priceText, parentText });
+  }
+  return items;
+}
+
 async function extractVisiblePrice(page) {
-  const euroLoc = page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true });
-  const euroCount = await euroLoc.count();
-  if (euroCount > 0) {
-    const allEuros = await euroLoc.allTextContents();
-    console.log('Prix € détectés :', allEuros.map(t => t.trim()));
-    const txt = (await euroLoc.first().textContent()).trim();
-    return { value: parseFloat(txt.replace('€', '').trim()), isUsd: false, rawText: txt };
+  const euroItems = await dumpPriceContexts(page, /€\s*\d+[.,]\d+/);
+  if (euroItems.length > 0) {
+    console.log('Candidats € :', JSON.stringify(euroItems, null, 2));
+    const raw = euroItems[0].priceText;
+    const num = parseFloat(raw.replace('€', '').replace(',', '.').trim());
+    return { value: num, isUsd: false, rawText: raw };
   }
 
-  const usdLoc = page.locator('text=/\\$\\s*\\d+\\.\\d+/').filter({ visible: true });
-  const usdCount = await usdLoc.count();
-  if (usdCount > 0) {
-    const allUsd = await usdLoc.allTextContents();
-    console.log('Prix $ détectés :', allUsd.map(t => t.trim()));
-    const txt = (await usdLoc.first().textContent()).trim();
-    return { value: parseFloat(txt.replace('$', '').trim()), isUsd: true, rawText: txt };
+  const usdItems = await dumpPriceContexts(page, /\$\s*\d+[.,]\d+/);
+  if (usdItems.length > 0) {
+    console.log('Candidats $ :', JSON.stringify(usdItems, null, 2));
+    const raw = usdItems[0].priceText;
+    const num = parseFloat(raw.replace('$', '').replace(',', '.').trim());
+    return { value: num, isUsd: true, rawText: raw };
   }
 
   throw new Error('Aucun prix (€ ou $) trouvé sur la page');
@@ -100,15 +114,6 @@ async function run() {
     await page.getByText(SERVER_NAME, { exact: true }).filter({ visible: true }).click();
     await page.waitForTimeout(2000);
 
-    const hasEuro = await page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).count();
-    if (!hasEuro) {
-      const eurSwitcher = page.locator('button, div, span, a').filter({ hasText: /^EUR$|^€$/ }).filter({ visible: true }).first();
-      if (await eurSwitcher.count() > 0) {
-        await eurSwitcher.click().catch(() => {});
-        await page.waitForTimeout(1500);
-      }
-    }
-
     const extracted = await extractVisiblePrice(page);
     if (isNaN(extracted.value)) throw new Error(`Prix illisible : ${extracted.rawText}`);
 
@@ -119,17 +124,22 @@ async function run() {
       console.log(`Conversion ${extracted.rawText} -> €${price.toFixed(2)} (taux ${rate.toFixed(4)})`);
     }
 
-    console.log(`Prix retenu (5M) : €${price.toFixed(2)} (précédent : ${previousPrice ?? 'inconnu'})`);
+    console.log(`Prix retenu : €${price.toFixed(2)} (précédent : ${previousPrice ?? 'inconnu'})`);
 
     const dot = price <= TARGET_PRICE ? '🟢' : '🔴';
     const formattedPrice = price.toFixed(2).replace('.', 'e');
-    await updateChannelName(`${dot}-kinah-${formattedPrice}`, currentName);
+    const newName = `${dot}-kinah-${formattedPrice}`;
+    await updateChannelName(newName, currentName);
 
     if (previousPrice !== null && price < previousPrice) {
       const diff = (previousPrice - price).toFixed(2);
       const alertPrefix = price <= TARGET_PRICE ? '🚨 **PRIX CIBLE ATTEINT !**' : '📉 **Baisse de prix détectée !**';
       await sendChannelMessage(
-        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})`
+        `${alertPrefix}\nLe prix pour **${SERVER_NAME}** vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})`
+      );
+    } else if (newName !== currentName) {
+      await sendChannelMessage(
+        `📊 **Mise à jour prix** (${SERVER_NAME}) : **€${price.toFixed(2)}** (cible : **€${TARGET_PRICE.toFixed(2)}**)`
       );
     }
   } catch (err) {
