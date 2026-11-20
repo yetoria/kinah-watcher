@@ -56,39 +56,50 @@ async function updateChannelName(newName, currentName) {
   if (!res.ok) console.warn(`⚠️ Erreur rename Discord (HTTP ${res.status})`);
 }
 
-async function dumpPriceContexts(page, regex) {
+async function collectCandidates(page, regex) {
   const loc = page.getByText(regex).filter({ visible: true });
   const count = await loc.count();
   const items = [];
-  for (let i = 0; i < Math.min(count, 10); i++) {
+  for (let i = 0; i < Math.min(count, 12); i++) {
     const el = loc.nth(i);
     const priceText = (await el.textContent())?.trim() ?? '';
     const parentText = (
-      await el.locator('xpath=ancestor::*[self::div or self::li or self::tr or self::button][1]').textContent().catch(() => '')
+      await el.locator('xpath=ancestor::*[self::div or self::li or self::tr or self::button][2]').textContent().catch(() => '')
     )
       ?.replace(/\s+/g, ' ')
       .trim()
-      .slice(0, 140) ?? '';
-    items.push({ priceText, parentText });
+      .slice(0, 160) ?? '';
+    const match = priceText.match(/(\d+[.,]\d+)/);
+    const value = match ? parseFloat(match[1].replace(',', '.')) : NaN;
+    items.push({ priceText, value, parentText });
   }
   return items;
 }
 
+function pickBestCandidate(items) {
+  const fiveMCandidate = items.find(
+    (item) => !isNaN(item.value) && /\b5\s*m\b/i.test(item.parentText)
+  );
+  if (fiveMCandidate) {
+    return { ...fiveMCandidate, matched5M: true };
+  }
+  const firstValid = items.find((item) => !isNaN(item.value));
+  return firstValid ? { ...firstValid, matched5M: false } : null;
+}
+
 async function extractVisiblePrice(page) {
-  const euroItems = await dumpPriceContexts(page, /€\s*\d+[.,]\d+/);
+  const euroItems = await collectCandidates(page, /€\s*\d+[.,]\d+/);
   if (euroItems.length > 0) {
     console.log('Candidats € :', JSON.stringify(euroItems, null, 2));
-    const raw = euroItems[0].priceText;
-    const match = raw.match(/(\d+[.,]\d+)/);
-    return { value: match ? parseFloat(match[1].replace(',', '.')) : NaN, isUsd: false, rawText: raw };
+    const chosen = pickBestCandidate(euroItems);
+    if (chosen) return { ...chosen, isUsd: false };
   }
 
-  const usdItems = await dumpPriceContexts(page, /\$\s*\d+[.,]\d+/);
+  const usdItems = await collectCandidates(page, /\$\s*\d+[.,]\d+/);
   if (usdItems.length > 0) {
     console.log('Candidats $ :', JSON.stringify(usdItems, null, 2));
-    const raw = usdItems[0].priceText;
-    const match = raw.match(/(\d+[.,]\d+)/);
-    return { value: match ? parseFloat(match[1].replace(',', '.')) : NaN, isUsd: true, rawText: raw };
+    const chosen = pickBestCandidate(usdItems);
+    if (chosen) return { ...chosen, isUsd: true };
   }
 
   const bodySnippet = (await page.locator('body').innerText().catch(() => ''))
@@ -124,16 +135,16 @@ async function run() {
     await page.waitForTimeout(2500);
 
     const extracted = await extractVisiblePrice(page);
-    if (isNaN(extracted.value)) throw new Error(`Prix illisible : ${extracted.rawText}`);
+    if (isNaN(extracted.value)) throw new Error(`Prix illisible : ${extracted.priceText}`);
 
     let price = extracted.value;
     if (extracted.isUsd) {
       const rate = await getUsdToEurRate();
       price = Number((extracted.value * rate).toFixed(2));
-      console.log(`Conversion ${extracted.rawText} -> €${price.toFixed(2)} (taux ${rate.toFixed(4)})`);
+      console.log(`Conversion ${extracted.priceText} -> €${price.toFixed(2)} (taux ${rate.toFixed(4)}, matched5M=${extracted.matched5M})`);
+    } else {
+      console.log(`Prix direct ${extracted.priceText} -> €${price.toFixed(2)} (matched5M=${extracted.matched5M})`);
     }
-
-    console.log(`Prix retenu : €${price.toFixed(2)} (précédent : ${previousPrice ?? 'inconnu'})`);
 
     const dot = price <= TARGET_PRICE ? '🟢' : '🔴';
     const formattedPrice = price.toFixed(2).replace('.', 'e');
@@ -144,11 +155,11 @@ async function run() {
       const diff = (previousPrice - price).toFixed(2);
       const alertPrefix = price <= TARGET_PRICE ? '🚨 **PRIX CIBLE ATTEINT !**' : '📉 **Baisse de prix détectée !**';
       await sendChannelMessage(
-        `${alertPrefix}\nLe prix pour **${SERVER_NAME}** vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})`
+        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})`
       );
     } else if (newName !== currentName) {
       await sendChannelMessage(
-        `📊 **Mise à jour prix** (${SERVER_NAME}) : **€${price.toFixed(2)}** (cible : **€${TARGET_PRICE.toFixed(2)}**)`
+        `📊 **Mise à jour prix** (5M — ${SERVER_NAME}) : **€${price.toFixed(2)}** (cible : **€${TARGET_PRICE.toFixed(2)}**)`
       );
     }
   } catch (err) {
