@@ -6,7 +6,7 @@ const TARGET_PRICE = 1.40;
 const FALLBACK_USD_TO_EUR = 0.92;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CHANNEL_ID = '1573349614529020025';
-const ANNOUNCE_START = false; // Désactivé pour ne pas envoyer un message vide de prix au démarrage
+const ANNOUNCE_START = false;
 
 async function getUsdToEurRate() {
   try {
@@ -57,13 +57,15 @@ async function updateChannelName(newName, currentName) {
 }
 
 async function dumpPriceContexts(page, regex) {
-  const loc = page.locator('text=' + regex.source).filter({ visible: true });
+  const loc = page.getByText(regex).filter({ visible: true });
   const count = await loc.count();
   const items = [];
   for (let i = 0; i < Math.min(count, 10); i++) {
     const el = loc.nth(i);
     const priceText = (await el.textContent())?.trim() ?? '';
-    const parentText = (await el.locator('xpath=ancestor::*[self::div or self::li or self::tr][1]').textContent().catch(() => ''))
+    const parentText = (
+      await el.locator('xpath=ancestor::*[self::div or self::li or self::tr or self::button][1]').textContent().catch(() => '')
+    )
       ?.replace(/\s+/g, ' ')
       .trim()
       .slice(0, 140) ?? '';
@@ -77,18 +79,23 @@ async function extractVisiblePrice(page) {
   if (euroItems.length > 0) {
     console.log('Candidats € :', JSON.stringify(euroItems, null, 2));
     const raw = euroItems[0].priceText;
-    const num = parseFloat(raw.replace('€', '').replace(',', '.').trim());
-    return { value: num, isUsd: false, rawText: raw };
+    const match = raw.match(/(\d+[.,]\d+)/);
+    return { value: match ? parseFloat(match[1].replace(',', '.')) : NaN, isUsd: false, rawText: raw };
   }
 
   const usdItems = await dumpPriceContexts(page, /\$\s*\d+[.,]\d+/);
   if (usdItems.length > 0) {
     console.log('Candidats $ :', JSON.stringify(usdItems, null, 2));
     const raw = usdItems[0].priceText;
-    const num = parseFloat(raw.replace('$', '').replace(',', '.').trim());
-    return { value: num, isUsd: true, rawText: raw };
+    const match = raw.match(/(\d+[.,]\d+)/);
+    return { value: match ? parseFloat(match[1].replace(',', '.')) : NaN, isUsd: true, rawText: raw };
   }
 
+  const bodySnippet = (await page.locator('body').innerText().catch(() => ''))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 400);
+  console.log('Extrait page :', bodySnippet);
   throw new Error('Aucun prix (€ ou $) trouvé sur la page');
 }
 
@@ -108,11 +115,13 @@ async function run() {
   const page = await context.newPage();
 
   try {
-    await page.goto(URL, { waitUntil: 'networkidle', timeout: 30000 });
-    await page.getByText('Europe', { exact: true }).filter({ visible: true }).click();
-    await page.getByText('Asmodians', { exact: true }).filter({ visible: true }).click();
-    await page.getByText(SERVER_NAME, { exact: true }).filter({ visible: true }).click();
-    await page.waitForTimeout(2000);
+    await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(2500);
+
+    await page.getByText('Europe', { exact: true }).filter({ visible: true }).first().click().catch(() => {});
+    await page.getByText('Asmodians', { exact: true }).filter({ visible: true }).first().click().catch(() => {});
+    await page.getByText(SERVER_NAME, { exact: true }).filter({ visible: true }).first().click().catch(() => {});
+    await page.waitForTimeout(2500);
 
     const extracted = await extractVisiblePrice(page);
     if (isNaN(extracted.value)) throw new Error(`Prix illisible : ${extracted.rawText}`);
