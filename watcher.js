@@ -12,7 +12,7 @@ async function getCurrentChannelInfo() {
   });
   if (!res.ok) return { name: null, previousPrice: null };
   const data = await res.json();
-  const match = data.name?.match(/(\d+)e(\d{2})/);
+  const match = data.name?.match(/(\d+)[ed](\d{2})/);
   const previousPrice = match ? parseFloat(`${match[1]}.${match[2]}`) : null;
   return { name: data.name, previousPrice };
 }
@@ -45,7 +45,9 @@ async function run() {
   const { name: currentName, previousPrice } = await getCurrentChannelInfo();
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    locale: 'fr-FR',
+    timezoneId: 'Europe/Paris'
   });
   const page = await context.newPage();
 
@@ -56,21 +58,32 @@ async function run() {
     await page.getByText(SERVER_NAME, { exact: true }).filter({ visible: true }).click();
     await page.waitForTimeout(2000);
 
-    const priceText = await page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).first().textContent();
-    const price = parseFloat(priceText.replace('€', '').trim());
-    if (isNaN(price)) throw new Error('Prix illisible');
+    const eurBtn = page.locator('text=/EUR|€/').filter({ visible: true }).first();
+    if (await eurBtn.count() > 0 && !(await page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).count())) {
+      await eurBtn.click().catch(() => {});
+      await page.waitForTimeout(1000);
+    }
 
-    console.log(`Prix actuel (5M) : €${price} (précédent : ${previousPrice ?? 'inconnu'})`);
+    const priceLocator = page.locator('text=/[€$]\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
+    const priceText = await priceLocator.textContent();
+    const isDollar = priceText.includes('$');
+    const currencySymbol = isDollar ? '$' : '€';
+    const currencyLetter = isDollar ? 'd' : 'e';
+    const price = parseFloat(priceText.replace(/[€$]/g, '').trim());
+
+    if (isNaN(price)) throw new Error(`Prix illisible : ${priceText}`);
+
+    console.log(`Prix actuel (5M) : ${currencySymbol}${price} (précédent : ${previousPrice ?? 'inconnu'})`);
 
     const dot = price <= TARGET_PRICE ? '🟢' : '🔴';
-    const formattedPrice = price.toFixed(2).replace('.', 'e');
+    const formattedPrice = price.toFixed(2).replace('.', currencyLetter);
     await updateChannelName(`${dot}-kinah-${formattedPrice}`, currentName);
 
     if (previousPrice !== null && price < previousPrice) {
       const diff = (previousPrice - price).toFixed(2);
       const alertPrefix = price <= TARGET_PRICE ? '🚨 **PRIX CIBLE ATTEINT !**' : '📉 **Baisse de prix détectée !**';
       await sendChannelMessage(
-        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})\n👉 ${URL}`
+        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **${currencySymbol}${previousPrice.toFixed(2)}** ➡️ **${currencySymbol}${price.toFixed(2)}** (-${currencySymbol}${diff})\n👉 ${URL}`
       );
     }
   } catch (err) {
