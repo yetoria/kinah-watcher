@@ -56,6 +56,28 @@ async function updateChannelName(newName, currentName) {
   if (!res.ok) console.warn(`⚠️ Erreur rename Discord (HTTP ${res.status})`);
 }
 
+async function extractVisiblePrice(page) {
+  const euroLoc = page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true });
+  const euroCount = await euroLoc.count();
+  if (euroCount > 0) {
+    const allEuros = await euroLoc.allTextContents();
+    console.log('Prix € détectés :', allEuros.map(t => t.trim()));
+    const txt = (await euroLoc.first().textContent()).trim();
+    return { value: parseFloat(txt.replace('€', '').trim()), isUsd: false, rawText: txt };
+  }
+
+  const usdLoc = page.locator('text=/\\$\\s*\\d+\\.\\d+/').filter({ visible: true });
+  const usdCount = await usdLoc.count();
+  if (usdCount > 0) {
+    const allUsd = await usdLoc.allTextContents();
+    console.log('Prix $ détectés :', allUsd.map(t => t.trim()));
+    const txt = (await usdLoc.first().textContent()).trim();
+    return { value: parseFloat(txt.replace('$', '').trim()), isUsd: true, rawText: txt };
+  }
+
+  throw new Error('Aucun prix (€ ou $) trouvé sur la page');
+}
+
 async function run() {
   const { name: currentName, previousPrice } = await getCurrentChannelInfo();
 
@@ -87,29 +109,17 @@ async function run() {
       }
     }
 
-    const euroLocator = page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
-    const dollarLocator = page.locator('text=/\\$\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
+    const extracted = await extractVisiblePrice(page);
+    if (isNaN(extracted.value)) throw new Error(`Prix illisible : ${extracted.rawText}`);
 
-    let rawPrice;
-    let price;
-
-    if (await euroLocator.count() > 0) {
-      const priceText = await euroLocator.textContent();
-      rawPrice = parseFloat(priceText.replace('€', '').trim());
-      price = rawPrice;
-    } else if (await dollarLocator.count() > 0) {
-      const priceText = await dollarLocator.textContent();
-      rawPrice = parseFloat(priceText.replace('$', '').trim());
+    let price = extracted.value;
+    if (extracted.isUsd) {
       const rate = await getUsdToEurRate();
-      price = Number((rawPrice * rate).toFixed(2));
-      console.log(`Converti $${rawPrice.toFixed(2)} -> €${price.toFixed(2)} (taux ${rate.toFixed(4)})`);
-    } else {
-      throw new Error('Aucun prix (€ ou $) trouvé sur la page');
+      price = Number((extracted.value * rate).toFixed(2));
+      console.log(`Conversion ${extracted.rawText} -> €${price.toFixed(2)} (taux ${rate.toFixed(4)})`);
     }
 
-    if (isNaN(price)) throw new Error('Prix illisible');
-
-    console.log(`Prix actuel (5M) : €${price.toFixed(2)} (précédent : ${previousPrice ?? 'inconnu'})`);
+    console.log(`Prix retenu (5M) : €${price.toFixed(2)} (précédent : ${previousPrice ?? 'inconnu'})`);
 
     const dot = price <= TARGET_PRICE ? '🟢' : '🔴';
     const formattedPrice = price.toFixed(2).replace('.', 'e');
@@ -119,7 +129,7 @@ async function run() {
       const diff = (previousPrice - price).toFixed(2);
       const alertPrefix = price <= TARGET_PRICE ? '🚨 **PRIX CIBLE ATTEINT !**' : '📉 **Baisse de prix détectée !**';
       await sendChannelMessage(
-        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})\n👉 ${URL}`
+        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})`
       );
     }
   } catch (err) {
