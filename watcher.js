@@ -3,9 +3,22 @@
 const URL = 'https://ezbuff.com/aion-2-kinah';
 const SERVER_NAME = 'Zemurru - Asmodians';
 const TARGET_PRICE = 1.40;
+const FALLBACK_USD_TO_EUR = 0.92;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CHANNEL_ID = '1573349614529020025';
-const ANNOUNCE_START = true; // Mets false si tu ne veux pas de message à chaque run
+const ANNOUNCE_START = true;
+
+async function getUsdToEurRate() {
+  try {
+    const res = await fetch('https://open.er-api.com/v6/latest/USD');
+    if (!res.ok) return FALLBACK_USD_TO_EUR;
+    const data = await res.json();
+    const rate = data?.rates?.EUR;
+    return typeof rate === 'number' && rate > 0 ? rate : FALLBACK_USD_TO_EUR;
+  } catch {
+    return FALLBACK_USD_TO_EUR;
+  }
+}
 
 async function getCurrentChannelInfo() {
   const res = await fetch(`https://discord.com/api/v10/channels/${CHANNEL_ID}`, {
@@ -65,7 +78,6 @@ async function run() {
     await page.getByText(SERVER_NAME, { exact: true }).filter({ visible: true }).click();
     await page.waitForTimeout(2000);
 
-    // Force EUR si présent sur la page
     const hasEuro = await page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).count();
     if (!hasEuro) {
       const eurSwitcher = page.locator('button, div, span, a').filter({ hasText: /^EUR$|^€$/ }).filter({ visible: true }).first();
@@ -78,34 +90,36 @@ async function run() {
     const euroLocator = page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
     const dollarLocator = page.locator('text=/\\$\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
 
-    let priceText;
-    let currencySymbol = '€';
-    let currencyLetter = 'e';
+    let rawPrice;
+    let price;
 
     if (await euroLocator.count() > 0) {
-      priceText = await euroLocator.textContent();
+      const priceText = await euroLocator.textContent();
+      rawPrice = parseFloat(priceText.replace('€', '').trim());
+      price = rawPrice;
     } else if (await dollarLocator.count() > 0) {
-      priceText = await dollarLocator.textContent();
-      currencySymbol = '$';
-      currencyLetter = 'd';
+      const priceText = await dollarLocator.textContent();
+      rawPrice = parseFloat(priceText.replace('$', '').trim());
+      const rate = await getUsdToEurRate();
+      price = Number((rawPrice * rate).toFixed(2));
+      console.log(`Converti $${rawPrice.toFixed(2)} -> €${price.toFixed(2)} (taux ${rate.toFixed(4)})`);
     } else {
       throw new Error('Aucun prix (€ ou $) trouvé sur la page');
     }
 
-    const price = parseFloat(priceText.replace(/[€$]/g, '').trim());
-    if (isNaN(price)) throw new Error(`Prix illisible : ${priceText}`);
+    if (isNaN(price)) throw new Error('Prix illisible');
 
-    console.log(`Prix actuel (5M) : ${currencySymbol}${price} (précédent : ${previousPrice ?? 'inconnu'})`);
+    console.log(`Prix actuel (5M) : €${price.toFixed(2)} (précédent : ${previousPrice ?? 'inconnu'})`);
 
     const dot = price <= TARGET_PRICE ? '🟢' : '🔴';
-    const formattedPrice = price.toFixed(2).replace('.', currencyLetter);
+    const formattedPrice = price.toFixed(2).replace('.', 'e');
     await updateChannelName(`${dot}-kinah-${formattedPrice}`, currentName);
 
     if (previousPrice !== null && price < previousPrice) {
       const diff = (previousPrice - price).toFixed(2);
       const alertPrefix = price <= TARGET_PRICE ? '🚨 **PRIX CIBLE ATTEINT !**' : '📉 **Baisse de prix détectée !**';
       await sendChannelMessage(
-        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **${currencySymbol}${previousPrice.toFixed(2)}** ➡️ **${currencySymbol}${price.toFixed(2)}** (-${currencySymbol}${diff})\n👉 ${URL}`
+        `${alertPrefix}\nLe prix pour **5M** (${SERVER_NAME}) vient de baisser : **€${previousPrice.toFixed(2)}** ➡️ **€${price.toFixed(2)}** (-€${diff})\n👉 ${URL}`
       );
     }
   } catch (err) {
