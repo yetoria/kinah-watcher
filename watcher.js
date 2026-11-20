@@ -5,6 +5,7 @@ const SERVER_NAME = 'Zemurru - Asmodians';
 const TARGET_PRICE = 1.40;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CHANNEL_ID = '1573349614529020025';
+const ANNOUNCE_START = true; // Mets false si tu ne veux pas de message à chaque run
 
 async function getCurrentChannelInfo() {
   const res = await fetch(`https://discord.com/api/v10/channels/${CHANNEL_ID}`, {
@@ -18,7 +19,7 @@ async function getCurrentChannelInfo() {
 }
 
 async function sendChannelMessage(content) {
-  await fetch(`https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`, {
+  const res = await fetch(`https://discord.com/api/v10/channels/${CHANNEL_ID}/messages`, {
     method: 'POST',
     headers: {
       'Authorization': `Bot ${DISCORD_BOT_TOKEN}`,
@@ -26,6 +27,7 @@ async function sendChannelMessage(content) {
     },
     body: JSON.stringify({ content })
   });
+  if (!res.ok) console.warn(`⚠️ Erreur envoi message Discord (HTTP ${res.status})`);
 }
 
 async function updateChannelName(newName, currentName) {
@@ -43,6 +45,11 @@ async function updateChannelName(newName, currentName) {
 
 async function run() {
   const { name: currentName, previousPrice } = await getCurrentChannelInfo();
+
+  if (ANNOUNCE_START) {
+    await sendChannelMessage(`🟢 **Watcher actif** — Vérification en cours pour **${SERVER_NAME}** (cible : **€${TARGET_PRICE.toFixed(2)}**).`);
+  }
+
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
@@ -58,19 +65,34 @@ async function run() {
     await page.getByText(SERVER_NAME, { exact: true }).filter({ visible: true }).click();
     await page.waitForTimeout(2000);
 
-    const eurBtn = page.locator('text=/EUR|€/').filter({ visible: true }).first();
-    if (await eurBtn.count() > 0 && !(await page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).count())) {
-      await eurBtn.click().catch(() => {});
-      await page.waitForTimeout(1000);
+    // Force EUR si présent sur la page
+    const hasEuro = await page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).count();
+    if (!hasEuro) {
+      const eurSwitcher = page.locator('button, div, span, a').filter({ hasText: /^EUR$|^€$/ }).filter({ visible: true }).first();
+      if (await eurSwitcher.count() > 0) {
+        await eurSwitcher.click().catch(() => {});
+        await page.waitForTimeout(1500);
+      }
     }
 
-    const priceLocator = page.locator('text=/[€$]\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
-    const priceText = await priceLocator.textContent();
-    const isDollar = priceText.includes('$');
-    const currencySymbol = isDollar ? '$' : '€';
-    const currencyLetter = isDollar ? 'd' : 'e';
-    const price = parseFloat(priceText.replace(/[€$]/g, '').trim());
+    const euroLocator = page.locator('text=/€\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
+    const dollarLocator = page.locator('text=/\\$\\s*\\d+\\.\\d+/').filter({ visible: true }).first();
 
+    let priceText;
+    let currencySymbol = '€';
+    let currencyLetter = 'e';
+
+    if (await euroLocator.count() > 0) {
+      priceText = await euroLocator.textContent();
+    } else if (await dollarLocator.count() > 0) {
+      priceText = await dollarLocator.textContent();
+      currencySymbol = '$';
+      currencyLetter = 'd';
+    } else {
+      throw new Error('Aucun prix (€ ou $) trouvé sur la page');
+    }
+
+    const price = parseFloat(priceText.replace(/[€$]/g, '').trim());
     if (isNaN(price)) throw new Error(`Prix illisible : ${priceText}`);
 
     console.log(`Prix actuel (5M) : ${currencySymbol}${price} (précédent : ${previousPrice ?? 'inconnu'})`);
@@ -89,6 +111,9 @@ async function run() {
   } catch (err) {
     console.error('Erreur lors du check :', err.message);
     await updateChannelName('🟠-kinah-erreur', currentName);
+    await sendChannelMessage(
+      `🔴 **Watcher arrêté / en erreur** sur **${SERVER_NAME}** : \`${err.message}\``
+    );
     process.exitCode = 1;
   } finally {
     await browser.close();
