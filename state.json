@@ -1,21 +1,21 @@
 {
   "lastChannelName": "🔴-kinah-inactif",
-  "statusMessageId": "1574322502635753534",
-  "lastUpdatedAt": 1795418113321,
+  "statusMessageId": "1574326607097634827",
+  "lastUpdatedAt": 1795419088502,
   "servers": {
     "zemurru": {
-      "lastPrice": 2.83,
+      "lastPrice": 2.6,
       "lastSignificantPrice": 2.83,
       "lastChangeAt": 1795418113321,
       "intervalsMinutes": [],
       "alertedDeal": false,
       "eldoradoBest": {
-        "seller": "XinXin520",
-        "price": 0.452,
-        "stock": "100",
+        "seller": "MHstore01",
+        "price": 0.44,
+        "stock": "300",
         "minQty": "10"
       },
-      "eldoradoLastPrice": 0.452,
+      "eldoradoLastPrice": 0.44,
       "eldoradoAlertedDeal": false,
       "lastVariationSummary": null
     },
@@ -26,9 +26,9 @@
       "intervalsMinutes": [],
       "alertedDeal": false,
       "eldoradoBest": {
-        "seller": "Vins_shop",
+        "seller": "MHstore01",
         "price": 0.359,
-        "stock": "9,999,900",
+        "stock": "300",
         "minQty": "10"
       },
       "eldoradoLastPrice": 0.359,
