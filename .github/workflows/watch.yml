@@ -56,4 +56,6 @@ jobs:
             -A "DiscordBot (https://github.com/yetoria/kinah-watcher, 1.0)" \
             -H "Authorization: Bot $DISCORD_TOKEN" \
             -H "Content-Type: application/json" \
+
+            # enable schedule
             -d '{"content":"🟠 **Arrêt inattendu du workflow GitHub Actions** (`Kinah Price Watcher`). Vérifie l\u0027onglet Actions."}'
