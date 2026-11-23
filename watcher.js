@@ -6,8 +6,8 @@ const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CHANNEL_ID = process.env.DISCORD_CHANNEL_ID || "1573349614529020025";
 const IS_GITHUB_ACTIONS = process.env.GITHUB_ACTIONS === "true";
 
-// Intervalle de refresh en secondes (ex. 420s = 7 min)
-const POLL_INTERVAL_SECONDS = Number(process.env.POLL_INTERVAL_SECONDS) || 420;
+// Intervalle de refresh en secondes (ex. 900s = 15 min)
+const POLL_INTERVAL_SECONDS = Number(process.env.POLL_INTERVAL_SECONDS) || 900;
 
 // Taux de secours si un runner US force l'affichage en $ au lieu de €
 const USD_TO_EUR_RATE = Number(process.env.USD_TO_EUR_RATE) || 0.92;
@@ -146,25 +146,18 @@ function formatDuration(minutes) {
   return m === 0 ? `${h}h` : `${h}h${String(m).padStart(2, "0")}`;
 }
 
-function formatAgo(ms, nowMs) {
-  if (typeof ms !== "number") return "à l'instant";
-  const diffSec = Math.max(0, Math.floor((nowMs - ms) / 1000));
-  if (diffSec < 60) return `y'a ${diffSec}s`;
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `y'a ${diffMin} min`;
-  const h = Math.floor(diffMin / 60);
-  const m = diffMin % 60;
-  return m === 0 ? `y'a ${h}h` : `y'a ${h}h${String(m).padStart(2, "0")}`;
-}
-
-function formatNextUpdate(nowMs) {
-  const nextMin = Math.max(1, Math.round(POLL_INTERVAL_SECONDS / 60));
-  const nextDate = new Date(nowMs + POLL_INTERVAL_SECONDS * 1000);
-  const hhmm = nextDate.toLocaleTimeString("fr-FR", {
+function formatParisTime(ms) {
+  return new Date(ms).toLocaleTimeString("fr-FR", {
+    timeZone: "Europe/Paris",
     hour: "2-digit",
     minute: "2-digit",
   });
-  return `dans ~${nextMin} min (${hhmm})`;
+}
+
+function formatFooterTimestamp(updatedAtMs, nowMs) {
+  const lastUpdateMs = typeof updatedAtMs === "number" ? updatedAtMs : nowMs;
+  const nextUpdateMs = nowMs + Math.max(1, POLL_INTERVAL_SECONDS) * 1000;
+  return `MAJ : ${formatParisTime(lastUpdateMs)} • Prochain : ~${formatParisTime(nextUpdateMs)}`;
 }
 
 function getMedianMinutes(values) {
@@ -314,7 +307,7 @@ function buildStatusEmbed(state, nowMs) {
     color: hasAnyActiveDeal ? 0x2ecc71 : 0x3498db,
     fields,
     footer: {
-      text: `Dernière actu : ${formatAgo(state.lastUpdatedAt ?? nowMs, nowMs)} • Prochaine actu : ${formatNextUpdate(nowMs)}`,
+      text: formatFooterTimestamp(state.lastUpdatedAt, nowMs),
     },
     timestamp: new Date(nowMs).toISOString(),
   };
@@ -647,7 +640,7 @@ async function run() {
           color: 0xe67e22,
           description: `\`${err.message.slice(0, 1500)}\``,
           footer: {
-            text: `Dernière actu : ${formatAgo(state.lastUpdatedAt ?? nowMs, nowMs)} • Prochaine actu : ${formatNextUpdate(nowMs)}`,
+            text: formatFooterTimestamp(state.lastUpdatedAt, nowMs),
           },
           timestamp: new Date(nowMs).toISOString(),
         },
